@@ -28,6 +28,7 @@
  *
  *
  * Authors: Simon Duquennoy <simonduq@sics.se>
+ *          Atis Elsts <atis.elsts@edi.lv>
  */
 
 #include "contiki.h"
@@ -66,6 +67,18 @@
 /* Initial ETX value */
 #define ETX_DEFAULT                      2
 
+#define RSSI_DIFF (LINK_STATS_RSSI_HIGH - LINK_STATS_RSSI_LOW)
+
+/* Generate error on incorrect link stats configuration values */
+#if RSSI_DIFF <= 0
+#error "RSSI_HIGH must be greater then RSSI_LOW"
+#endif
+
+/* Generate error if the initial ETX calculation would overflow uint16_t */
+#if ETX_DIVISOR * RSSI_DIFF >= 0x10000
+#error "RSSI math overflow"
+#endif
+
 /* Per-neighbor link statistics table */
 NBR_TABLE(struct link_stats, link_stats);
 
@@ -97,30 +110,26 @@ link_stats_is_fresh(const struct link_stats *stats)
 }
 /*---------------------------------------------------------------------------*/
 #if LINK_STATS_INIT_ETX_FROM_RSSI
-uint16_t
+/*
+ * Returns initial ETX value from an RSSI value.
+ *    RSSI >= RSSI_HIGH           -> use default ETX
+ *    RSSI_LOW < RSSI < RSSI_HIGH -> ETX is a linear function of RSSI
+ *    RSSI <= RSSI_LOW            -> use minimal initial ETX
+ **/
+static uint16_t
 guess_etx_from_rssi(const struct link_stats *stats)
 {
   if(stats != NULL) {
-    if(stats->rssi == 0) {
+    if(stats->rssi == LINK_STATS_RSSI_UNKNOWN) {
       return ETX_DEFAULT * ETX_DIVISOR;
     } else {
-      /* A rough estimate of PRR from RSSI, as a linear function where:
-       *      RSSI >= -60 results in PRR of 1
-       *      RSSI <= -90 results in PRR of 0
-       * prr = (bounded_rssi - RSSI_LOW) / (RSSI_DIFF)
-       * etx = ETX_DIVOSOR / ((bounded_rssi - RSSI_LOW) / RSSI_DIFF)
-       * etx = (RSSI_DIFF * ETX_DIVOSOR) / (bounded_rssi - RSSI_LOW)
-       * */
-#define ETX_INIT_MAX 3
-#define RSSI_HIGH -60
-#define RSSI_LOW  -90
-#define RSSI_DIFF (RSSI_HIGH - RSSI_LOW)
-      uint16_t etx;
-      int16_t bounded_rssi = stats->rssi;
-      bounded_rssi = MIN(bounded_rssi, RSSI_HIGH);
-      bounded_rssi = MAX(bounded_rssi, RSSI_LOW + 1);
-      etx = RSSI_DIFF * ETX_DIVISOR / (bounded_rssi - RSSI_LOW);
-      return MIN(etx, ETX_INIT_MAX * ETX_DIVISOR);
+      const int16_t rssi_delta = stats->rssi - LINK_STATS_RSSI_LOW;
+      const int16_t bounded_rssi_delta = BOUND(rssi_delta, 0, RSSI_DIFF);
+      /* Penalty is in the range from 0 to ETX_DIVISOR */
+      const uint16_t penalty = ETX_DIVISOR * bounded_rssi_delta / RSSI_DIFF;
+      /* ETX is the default ETX value + penalty */
+      const uint16_t etx = ETX_DIVISOR * ETX_DEFAULT + penalty;
+      return MIN(etx, LINK_STATS_ETX_INIT_MAX * ETX_DIVISOR);
     }
   }
   return 0xffff;
@@ -151,15 +160,10 @@ link_stats_packet_sent(const linkaddr_t *lladdr, int status, int numtx)
 
     /* Add the neighbor */
     stats = nbr_table_add_lladdr(link_stats, lladdr, NBR_TABLE_REASON_LINK_STATS, NULL);
-    if(stats != NULL) {
-#if LINK_STATS_INIT_ETX_FROM_RSSI
-      stats->etx = guess_etx_from_rssi(stats);
-#else /* LINK_STATS_INIT_ETX_FROM_RSSI */
-      stats->etx = ETX_DEFAULT * ETX_DIVISOR;
-#endif /* LINK_STATS_INIT_ETX_FROM_RSSI */
-    } else {
+    if(stats == NULL) {
       return; /* No space left, return */
     }
+    stats->rssi = LINK_STATS_RSSI_UNKNOWN;
   }
 
   if(status == MAC_TX_QUEUE_FULL) {
@@ -213,9 +217,14 @@ link_stats_packet_sent(const linkaddr_t *lladdr, int status, int numtx)
   /* ETX alpha used for this update */
   ewma_alpha = link_stats_is_fresh(stats) ? EWMA_ALPHA : EWMA_BOOTSTRAP_ALPHA;
 
-  /* Compute EWMA and update ETX */
-  stats->etx = ((uint32_t)stats->etx * (EWMA_SCALE - ewma_alpha) +
-      (uint32_t)packet_etx * ewma_alpha) / EWMA_SCALE;
+  if(stats->etx == 0) {
+    /* Initialize ETX */
+    stats->etx = packet_etx;
+  } else {
+    /* Compute EWMA and update ETX */
+    stats->etx = ((uint32_t)stats->etx * (EWMA_SCALE - ewma_alpha) +
+        (uint32_t)packet_etx * ewma_alpha) / EWMA_SCALE;
+  }
 #endif /* LINK_STATS_ETX_FROM_PACKET_COUNT */
 }
 /*---------------------------------------------------------------------------*/
@@ -230,24 +239,29 @@ link_stats_input_callback(const linkaddr_t *lladdr)
   if(stats == NULL) {
     /* Add the neighbor */
     stats = nbr_table_add_lladdr(link_stats, lladdr, NBR_TABLE_REASON_LINK_STATS, NULL);
-    if(stats != NULL) {
-      /* Initialize */
-      stats->rssi = packet_rssi;
-#if LINK_STATS_INIT_ETX_FROM_RSSI
-      stats->etx = guess_etx_from_rssi(stats);
-#else /* LINK_STATS_INIT_ETX_FROM_RSSI */
-      stats->etx = ETX_DEFAULT * ETX_DIVISOR;
-#endif /* LINK_STATS_INIT_ETX_FROM_RSSI */
-#if LINK_STATS_PACKET_COUNTERS
-      stats->cnt_current.num_packets_rx = 1;
-#endif
+    if(stats == NULL) {
+      return; /* No space left, return */
     }
-    return;
+    stats->rssi = LINK_STATS_RSSI_UNKNOWN;
   }
 
-  /* Update RSSI EWMA */
-  stats->rssi = ((int32_t)stats->rssi * (EWMA_SCALE - EWMA_ALPHA) +
-      (int32_t)packet_rssi * EWMA_ALPHA) / EWMA_SCALE;
+  if(stats->rssi == LINK_STATS_RSSI_UNKNOWN) {
+    /* Initialize RSSI */
+    stats->rssi = packet_rssi;
+  } else {
+    /* Update RSSI EWMA */
+    stats->rssi = ((int32_t)stats->rssi * (EWMA_SCALE - EWMA_ALPHA) +
+        (int32_t)packet_rssi * EWMA_ALPHA) / EWMA_SCALE;
+  }
+
+  if(stats->etx == 0) {
+    /* Initialize ETX */
+#if LINK_STATS_INIT_ETX_FROM_RSSI
+    stats->etx = guess_etx_from_rssi(stats);
+#else /* LINK_STATS_INIT_ETX_FROM_RSSI */
+    stats->etx = ETX_DEFAULT * ETX_DIVISOR;
+#endif /* LINK_STATS_INIT_ETX_FROM_RSSI */
+  }
 
 #if LINK_STATS_PACKET_COUNTERS
   stats->cnt_current.num_packets_rx++;
