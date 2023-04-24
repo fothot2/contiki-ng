@@ -68,3 +68,10 @@ summary
 tests/[0-9][0-9]-*/org/
 tests/18-coap-lwm2m/Californium.properties
 tests/18-coap-lwm2m/leshan-server-demo*.jar
+examples/hello-world/modified-Hello2.c
+examples/NikoleAlgos/ContikiNG_CEID_NetAlgos/
+examples/NikoleAlgos/.vscode/c_cpp_properties.json
+examples/hello-world/Test.c
+examples/hello-world/output.txt
+examples/hello-world/modified-Hello2b.c
+examples/hello-world/exercise_2a.csc

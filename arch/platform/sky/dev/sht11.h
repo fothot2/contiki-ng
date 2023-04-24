@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, Swedish Institute of Computer Science.
+ * Copyright (c) 2007, Swedish Institute of Computer Science
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -26,41 +26,25 @@
  * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
  * SUCH DAMAGE.
  *
- * This file is part of the Contiki operating system.
+ */
+
+#ifndef SHT11_H
+#define SHT11_H
+
+void sht11_init(void);
+void sht11_off(void);
+
+unsigned int sht11_temp(void);
+unsigned int sht11_humidity(void);
+unsigned int sht11_sreg(void);
+int      sht11_set_sreg(unsigned);
+
+/*
+ * Relative Humidity in percent (h in 12 bits resolution)
+ * RH = -4 + 0.0405*h - 2.8e-6*(h*h)
  *
+ * Temperature in Celsius (t in 14 bits resolution at 3 Volts)
+ * T = -39.60 + 0.01*t
  */
 
-/**
- * \file
- *         A very simple Contiki application showing how Contiki programs look
- * \author
- *         Adam Dunkels <adam@sics.se>
- */
-
-#include "contiki.h"
-
-#include <stdio.h> /* For printf() */
-/*---------------------------------------------------------------------------*/
-PROCESS(hello_world_process, "Hello world process");
-AUTOSTART_PROCESSES(&hello_world_process);
-/*---------------------------------------------------------------------------*/
-PROCESS_THREAD(hello_world_process, ev, data)
-{
-  static struct etimer timer;
-
-  PROCESS_BEGIN();
-
-  /* Setup a periodic timer that expires after 10 seconds. */
-  etimer_set(&timer, CLOCK_SECOND * 10);
-
-  while(1) {
-    printf("Hello world!");
-
-    /* Wait for the periodic timer to expire and then restart the timer. */
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
-    etimer_reset(&timer);
-  }
-
-  PROCESS_END();
-}
-/*---------------------------------------------------------------------------*/
+#endif /* SHT11_H */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006, Swedish Institute of Computer Science.
+ * Copyright (c) 2005, Swedish Institute of Computer Science
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -30,37 +30,73 @@
  *
  */
 
-/**
- * \file
- *         A very simple Contiki application showing how Contiki programs look
- * \author
- *         Adam Dunkels <adam@sics.se>
- */
+#include <stdlib.h>
 
 #include "contiki.h"
+#include "lib/sensors.h"
+#include "dev/sensor/sht11/sht11.h"
+#include "dev/sensor/sht11/sht11-sensor.h"
 
-#include <stdio.h> /* For printf() */
+const struct sensors_sensor sht11_sensor;
+
+enum {
+  ON, OFF
+};
+static uint8_t state = OFF;
+
 /*---------------------------------------------------------------------------*/
-PROCESS(hello_world_process, "Hello world process");
-AUTOSTART_PROCESSES(&hello_world_process);
-/*---------------------------------------------------------------------------*/
-PROCESS_THREAD(hello_world_process, ev, data)
+static int
+value(int type)
 {
-  static struct etimer timer;
+  switch(type) {
+    /* Photosynthetically Active Radiation. */
+  case SHT11_SENSOR_TEMP:
+    return sht11_temp();;
 
-  PROCESS_BEGIN();
+    /* Total Solar Radiation. */
+  case SHT11_SENSOR_HUMIDITY:
+    return sht11_humidity();
 
-  /* Setup a periodic timer that expires after 10 seconds. */
-  etimer_set(&timer, CLOCK_SECOND * 10);
-
-  while(1) {
-    printf("Hello world!");
-
-    /* Wait for the periodic timer to expire and then restart the timer. */
-    PROCESS_WAIT_EVENT_UNTIL(etimer_expired(&timer));
-    etimer_reset(&timer);
-  }
-
-  PROCESS_END();
+  case SHT11_SENSOR_BATTERY_INDICATOR:
+    return sht11_sreg() & 0x40? 1: 0;
+}
+  return 0;
 }
 /*---------------------------------------------------------------------------*/
+static int
+status(int type)
+{
+  switch(type) {
+  case SENSORS_ACTIVE:
+  case SENSORS_READY:
+    return (state == ON);
+  }
+  return 0;
+}
+
+/*---------------------------------------------------------------------------*/
+static int
+configure(int type, int c)
+{
+  switch(type) {
+  case SENSORS_ACTIVE:
+    if(c) {
+      if(!status(SENSORS_ACTIVE)) {
+        rtimer_clock_t t0;
+	sht11_init();
+        state = ON;
+
+        /* For for about 11 ms before the SHT11 can be used. */
+        t0 = RTIMER_NOW();
+        while(RTIMER_CLOCK_LT(RTIMER_NOW(), t0 + RTIMER_SECOND / 100));
+      }
+    } else {
+      sht11_off();
+      state = OFF;
+    }
+  }
+  return 0;
+}
+/*---------------------------------------------------------------------------*/
+SENSORS_SENSOR(sht11_sensor, "sht11",
+	       value, configure, status);
